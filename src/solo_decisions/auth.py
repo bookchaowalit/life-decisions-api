@@ -40,20 +40,34 @@ class TokenVerifier:
     issuer: str
     audience: str = AUDIENCE
     max_lifetime: int = HARD_MAX_LIFETIME_SECONDS
+    # Rollover keys for the same issuer: tokens signed by any of them verify too (key rotation).
+    extra_public_key_pems: tuple[str, ...] = ()
+
+    def _decode(self, token: str) -> dict:
+        keys = (self.public_key_pem, *self.extra_public_key_pems)
+        for key in keys[:-1]:
+            try:
+                return self._decode_with(token, key)
+            except jwt.InvalidSignatureError:
+                continue
+        return self._decode_with(token, keys[-1])
+
+    def _decode_with(self, token: str, key: str) -> dict:
+        return jwt.decode(
+            token,
+            key,
+            algorithms=["RS256"],
+            audience=self.audience,
+            issuer=self.issuer,
+            options={"require": ["exp", "iat", "sub", "jti"]},
+        )
 
     def verify(self, authorization: str | None, channel: str | None) -> Principal:
         if not authorization or not authorization.startswith("Bearer "):
             raise Unauthenticated("missing bearer token")
         token = authorization.removeprefix("Bearer ")
         try:
-            claims = jwt.decode(
-                token,
-                self.public_key_pem,
-                algorithms=["RS256"],
-                audience=self.audience,
-                issuer=self.issuer,
-                options={"require": ["exp", "iat", "sub", "jti"]},
-            )
+            claims = self._decode(token)
             lifetime = claims["exp"] - claims["iat"]
             limit = (
                 self.max_lifetime
