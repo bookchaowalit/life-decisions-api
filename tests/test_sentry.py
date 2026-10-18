@@ -85,7 +85,7 @@ def test_scrub_event_drops_request_details_and_extra():
     }
     out = _sentry._scrub_event(event, {})
     assert out["exception"]["values"][0]["value"] == "bad url postgres://u:***@h/db"
-    assert out["request"] == {"method": "POST", "url": "https://x/habits"}
+    assert out["request"] == {"method": "POST"}
     assert "data" not in out["breadcrumbs"]["values"][0]
     assert "abc" not in out["breadcrumbs"]["values"][0]["message"]
     assert "extra" not in out
