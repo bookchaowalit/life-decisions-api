@@ -56,6 +56,11 @@ def _scrub_event(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]
             crumb["message"] = scrub(crumb["message"])
         crumb.pop("data", None)
     event.pop("extra", None)
+    # Incoming baggage headers end up here and in the envelope's trace header (user ids,
+    # transaction names); errors don't need them.
+    trace = (event.get("contexts") or {}).get("trace")
+    if isinstance(trace, dict):
+        trace.pop("dynamic_sampling_context", None)
     return event
 
 
@@ -72,7 +77,9 @@ def init_sentry() -> None:
         release=os.environ.get("RAILWAY_GIT_COMMIT_SHA")
         or os.environ.get("SENTRY_RELEASE")
         or None,
-        traces_sample_rate=0.0,  # errors only: the free plan's quota is for errors
+        # None (not 0.0) disables tracing completely: with 0.0 an incoming sentry-trace header
+        # can still force a sampled transaction that carries the URL, query and headers.
+        traces_sample_rate=None,
         send_default_pii=False,
         include_local_variables=False,  # frame locals hold JWTs and database URLs
         max_request_body_size="never",

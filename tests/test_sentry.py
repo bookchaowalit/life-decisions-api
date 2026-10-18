@@ -30,7 +30,7 @@ def test_dsn_initialises_errors_only_without_pii(monkeypatch, capsys):
     monkeypatch.delenv("SENTRY_ENVIRONMENT", raising=False)
     _sentry.init_sentry()
     assert calls[0]["environment"] == "production"
-    assert calls[0]["traces_sample_rate"] == 0.0
+    assert calls[0]["traces_sample_rate"] is None
     assert calls[0]["send_default_pii"] is False
     assert calls[0]["include_local_variables"] is False
     assert calls[0]["max_request_body_size"] == "never"
@@ -108,3 +108,13 @@ def test_scrub_event_keeps_only_scrubbed_formatted_log_text():
     out = _sentry._scrub_event(event, {})
     assert out["logentry"] == {"message": "Authorization: Bearer ***"}
     assert token not in str(out)
+
+
+def test_scrub_event_drops_dynamic_sampling_context():
+    event = {
+        "contexts": {
+            "trace": {"trace_id": "t", "dynamic_sampling_context": {"user_id": "alice"}}
+        }
+    }
+    out = _sentry._scrub_event(event, {})
+    assert out["contexts"]["trace"] == {"trace_id": "t"}
