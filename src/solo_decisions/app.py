@@ -40,6 +40,7 @@ from fastapi import (
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
+from solo_decisions._sentry import capture
 from solo_decisions.auth import Principal, TokenVerifier, Unauthenticated
 from solo_decisions.platform import Action, Denied, Platform, PlatformUnavailable
 from solo_decisions.publisher import publish_pending
@@ -513,7 +514,8 @@ def create_app(
     ) -> None:
         try:
             platform.finish(caller.token, caller.channel, execution, outcome)
-        except (PlatformUnavailable, Denied):
+        except (PlatformUnavailable, Denied) as exc:
+            capture(exc)  # the write succeeded; only the audit finish failed
             # The local change is committed; the execution stays "running" until reconciled.
             log.warning(
                 json.dumps(
