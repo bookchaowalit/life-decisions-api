@@ -48,8 +48,9 @@ def _scrub_event(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]
         event["logentry"] = {"message": scrub(str(formatted))} if formatted else {}
     request = event.get("request")
     if isinstance(request, dict):
-        # Keep only what identifies the route; drop headers, cookies, body and query string.
-        event["request"] = {k: request[k] for k in ("method", "url") if k in request}
+        # Keep only the method. URLs can carry personal data (slugs, ids, query strings); the
+        # route template (e.g. /v1/habits/slug/{slug}) is already in event["transaction"].
+        event["request"] = {"method": request["method"]} if "method" in request else {}
     for crumb in (event.get("breadcrumbs") or {}).get("values") or []:
         if isinstance(crumb.get("message"), str):
             crumb["message"] = scrub(crumb["message"])
