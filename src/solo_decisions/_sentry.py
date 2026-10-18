@@ -40,11 +40,12 @@ def _scrub_event(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]
             exc["value"] = scrub(exc["value"])
     if isinstance(event.get("message"), str):
         event["message"] = scrub(event["message"])
-    logentry = event.get("logentry") or {}
-    if isinstance(logentry.get("message"), str):
-        logentry["message"] = scrub(logentry["message"])
-    if logentry.get("params"):
-        logentry["params"] = [scrub(str(p)) for p in logentry["params"]]
+    logentry = event.get("logentry")
+    if isinstance(logentry, dict):
+        # Logging events carry the template, the raw params and the formatted text; keep only
+        # the scrubbed formatted text (a param like a token is no longer next to "Bearer").
+        formatted = logentry.get("formatted") or logentry.get("message")
+        event["logentry"] = {"message": scrub(str(formatted))} if formatted else {}
     request = event.get("request")
     if isinstance(request, dict):
         # Keep only what identifies the route; drop headers, cookies, body and query string.
@@ -62,6 +63,7 @@ def init_sentry() -> None:
     if not dsn:
         return
     import sentry_sdk
+    from sentry_sdk.integrations.logging import LoggingIntegration
 
     sentry_sdk.init(
         dsn=dsn,
@@ -74,6 +76,12 @@ def init_sentry() -> None:
         include_local_variables=False,  # frame locals hold JWTs and database URLs
         max_request_body_size="never",
         before_send=_scrub_event,
+        # Log records are neither events nor breadcrumbs: free-form log text can carry secrets
+        # that no pattern can recognise. Unhandled exceptions (FastAPI, excepthook) and capture()
+        # still report.
+        integrations=[
+            LoggingIntegration(level=None, event_level=None, sentry_logs_level=None)
+        ],
     )
     service = os.environ.get("RAILWAY_SERVICE_NAME", "").strip()
     if service:
