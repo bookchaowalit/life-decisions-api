@@ -2,12 +2,59 @@
 
 A no-op unless SENTRY_DSN is set, so tests and local runs never send anything. Imported by the
 package ``__init__``, so every entry point (API, publisher, DB tool, MCP server) reports errors.
+
+Nothing sensitive leaves the process: no stack-frame local variables (they hold JWTs and database
+URLs), no request bodies, headers, cookies or query strings, and every message is scrubbed of
+URL passwords, bearer tokens and JWTs before it is sent.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
+from typing import Any
+
+# scheme://user:password@host -> scheme://user:***@host
+_URL_PASSWORD = re.compile(
+    r"(?P<head>[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+:)[^\s@]+(?=@)"
+)
+# key=value / key: value secrets in libpq-style conninfo strings and similar
+_KV_SECRET = re.compile(
+    r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key)(\s*[=:]\s*)\S+"
+)
+_BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
+
+
+def scrub(text: str) -> str:
+    text = _URL_PASSWORD.sub(r"\g<head>***", text)
+    text = _KV_SECRET.sub(r"\1\2***", text)
+    text = _BEARER.sub("Bearer ***", text)
+    return _JWT.sub("***jwt***", text)
+
+
+def _scrub_event(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]:
+    for exc in (event.get("exception") or {}).get("values") or []:
+        if isinstance(exc.get("value"), str):
+            exc["value"] = scrub(exc["value"])
+    if isinstance(event.get("message"), str):
+        event["message"] = scrub(event["message"])
+    logentry = event.get("logentry") or {}
+    if isinstance(logentry.get("message"), str):
+        logentry["message"] = scrub(logentry["message"])
+    if logentry.get("params"):
+        logentry["params"] = [scrub(str(p)) for p in logentry["params"]]
+    request = event.get("request")
+    if isinstance(request, dict):
+        # Keep only what identifies the route; drop headers, cookies, body and query string.
+        event["request"] = {k: request[k] for k in ("method", "url") if k in request}
+    for crumb in (event.get("breadcrumbs") or {}).get("values") or []:
+        if isinstance(crumb.get("message"), str):
+            crumb["message"] = scrub(crumb["message"])
+        crumb.pop("data", None)
+    event.pop("extra", None)
+    return event
 
 
 def init_sentry() -> None:
@@ -24,12 +71,26 @@ def init_sentry() -> None:
         or None,
         traces_sample_rate=0.0,  # errors only: the free plan's quota is for errors
         send_default_pii=False,
+        include_local_variables=False,  # frame locals hold JWTs and database URLs
+        max_request_body_size="never",
+        before_send=_scrub_event,
     )
     service = os.environ.get("RAILWAY_SERVICE_NAME", "").strip()
     if service:
         sentry_sdk.set_tag("service", service)
+    # stderr, never stdout: stdio MCP servers in this package use stdout for the protocol.
     print(
         f"sentry: enabled for {service or 'unknown service'}",
         file=sys.stderr,
         flush=True,
     )
+
+
+def capture(exc: BaseException) -> None:
+    """Report an exception a cron/CLI handler catches and turns into an exit code."""
+    if not os.environ.get("SENTRY_DSN", "").strip():
+        return
+    import sentry_sdk
+
+    sentry_sdk.capture_exception(exc)
+    sentry_sdk.flush(5)

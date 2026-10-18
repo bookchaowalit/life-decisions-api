@@ -24,6 +24,8 @@ import jwt
 import psycopg
 from psycopg.rows import dict_row
 
+from ._sentry import capture
+
 MAX_BACKOFF_SECONDS = 600
 
 
@@ -51,6 +53,7 @@ def publish_pending(
         (token_workspace(token), limit),
     ).fetchall()
     counts = {"published": 0, "failed": 0}
+    reported = False  # one Sentry event per sweep, not one per failed row
     for row in rows:
         event = {
             "id": str(row["id"]),
@@ -67,6 +70,9 @@ def publish_pending(
         try:
             platform.publish(token, event)
         except Exception as exc:  # noqa: BLE001 - any publish failure is retried with backoff; only the error class is kept
+            if not reported:
+                capture(exc)
+                reported = True
             delay = min(MAX_BACKOFF_SECONDS, 5 * 2 ** min(row["attempts"], 10))
             conn.execute(
                 "UPDATE decisions.outbox SET attempts = attempts + 1, next_attempt_at = %s, last_error = %s"
