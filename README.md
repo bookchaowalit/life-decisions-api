@@ -62,7 +62,8 @@ DECISIONS_DB_MODE=hosted .venv/bin/decisions-db migrate
 npm install && railway up --ci                       # from a linked checkout
 ```
 
-Railway variables (never in the repository): `DECISIONS_DB_MODE=hosted`,
+Railway variables (never in the repository): `SENTRY_DSN` (error reporting; unset = off, see
+`src/solo_decisions/_sentry.py`), `DECISIONS_DB_MODE=hosted`,
 `DECISIONS_DB_URL_API`, `DECISIONS_DB_URL_PUBLISHER`,
 `DECISIONS_JWT_PUBLIC_KEY_PEM`, `DECISIONS_JWT_ISSUER`, `EMPIRE_PLATFORM_URL`,
 `DECISIONS_PUBLISHER_TOKEN`.
