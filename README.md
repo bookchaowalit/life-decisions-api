@@ -59,8 +59,14 @@ uv venv .venv && uv pip install --python .venv/bin/python -e ".[dev]"
 ```bash
 NEON_API_KEY=... .venv/bin/decisions-db provision    # project, roles, migrations; URLs owner-only
 DECISIONS_DB_MODE=hosted .venv/bin/decisions-db migrate
-npm install && railway up --ci                       # from a linked checkout
+npm install && railway config apply                  # service settings only; code deploys from GitHub (below)
 ```
+
+Deploys (CD, since 2026-10-18): `decisions-api` and `decisions-publisher` are connected to this
+repository's `main` with Railway's Wait for CI (`checkSuites`). A merge to `main` deploys only
+after the CI and security checks pass; a failing check leaves production on the previous
+deployment. Roll back by redeploying an earlier deployment in Railway. `railway up` is no
+longer used.
 
 Railway variables (never in the repository): `SENTRY_DSN` (error reporting; unset = off, see
 `src/solo_decisions/_sentry.py`), `DECISIONS_DB_MODE=hosted`,
