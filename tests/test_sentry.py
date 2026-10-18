@@ -19,18 +19,12 @@ def test_no_dsn_is_a_noop(monkeypatch):
 
 
 def test_dsn_initialises_errors_only_without_pii(monkeypatch, capsys):
+    sentry_sdk = pytest.importorskip("sentry_sdk")
     calls, tags = [], {}
-
-    class Fake:
-        @staticmethod
-        def init(**kw):
-            calls.append(kw)
-
-        @staticmethod
-        def set_tag(key, value):
-            tags[key] = value
-
-    monkeypatch.setitem(sys.modules, "sentry_sdk", Fake)
+    monkeypatch.setattr(sentry_sdk, "init", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(
+        sentry_sdk, "set_tag", lambda key, value: tags.__setitem__(key, value)
+    )
     monkeypatch.setenv("SENTRY_DSN", "https://public@o0.ingest.sentry.io/0")
     monkeypatch.setenv("RAILWAY_SERVICE_NAME", "decisions-api")
     monkeypatch.delenv("SENTRY_ENVIRONMENT", raising=False)
@@ -41,6 +35,10 @@ def test_dsn_initialises_errors_only_without_pii(monkeypatch, capsys):
     assert calls[0]["include_local_variables"] is False
     assert calls[0]["max_request_body_size"] == "never"
     assert calls[0]["before_send"] is _sentry._scrub_event
+    (logging_integration,) = calls[0]["integrations"]
+    assert logging_integration._handler is None
+    assert logging_integration._breadcrumb_handler is None
+    assert logging_integration._sentry_logs_handler is None
     assert tags == {"service": "decisions-api"}
     assert "sentry: enabled for decisions-api" in capsys.readouterr().err
 
@@ -96,3 +94,17 @@ def test_scrub_event_drops_request_details_and_extra():
 def test_capture_is_a_noop_without_dsn(monkeypatch):
     monkeypatch.delenv("SENTRY_DSN", raising=False)
     _sentry.capture(RuntimeError("x"))  # must not import or call sentry_sdk
+
+
+def test_scrub_event_keeps_only_scrubbed_formatted_log_text():
+    token = "opaque" + "-token-value"
+    event = {
+        "logentry": {
+            "message": "Authorization: Bearer %s",
+            "params": [token],
+            "formatted": "Authorization: Bearer " + token,
+        }
+    }
+    out = _sentry._scrub_event(event, {})
+    assert out["logentry"] == {"message": "Authorization: Bearer ***"}
+    assert token not in str(out)
