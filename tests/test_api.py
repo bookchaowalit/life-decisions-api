@@ -38,8 +38,10 @@ def test_create_records_history_outbox_and_audit(
     decision = create(
         client, headers, domain="sales", confidence=0.7, evidence_refs=["crm-deal:4"]
     )
-    assert decision["status"] == "proposed" and decision["approval_status"] == "pending"
-    assert decision["evidence_refs"] == ["crm-deal:4"] and decision["version"] == 1
+    assert decision["status"] == "proposed"
+    assert decision["approval_status"] == "pending"
+    assert decision["evidence_refs"] == ["crm-deal:4"]
+    assert decision["version"] == 1
     events = client.get(
         f"/v1/decisions/{decision['id']}/events", headers=headers
     ).json()["items"]
@@ -61,9 +63,9 @@ def test_create_records_history_outbox_and_audit(
         for e in platform.executions.values()
         if e.get("resource_id") == str(decision["id"])
     ]
-    assert (
-        finished and finished[0]["status"] == "succeeded" and finished[0]["after_hash"]
-    )
+    assert finished
+    assert finished[0]["status"] == "succeeded"
+    assert finished[0]["after_hash"]
 
 
 def test_reader_cannot_write_and_nothing_is_written(client, token, platform, cluster):
@@ -102,7 +104,8 @@ def test_changing_approval_needs_the_approve_permission(client, token, owner, pl
             },
         },
     )
-    assert approved.status_code == 200 and approved.json()["version"] == 2
+    assert approved.status_code == 200
+    assert approved.json()["version"] == 2
     event = client.get(
         f"/v1/decisions/{decision['id']}/events", headers=token(*owner)
     ).json()["items"][0]
@@ -124,7 +127,8 @@ def test_version_conflict_changes_nothing_and_starts_no_execution(
         headers=token(*owner),
         json={"title": "New", "expected_version": 5},
     )
-    assert response.status_code == 409 and response.json()["detail"]["version"] == 1
+    assert response.status_code == 409
+    assert response.json()["detail"]["version"] == 1
     assert (
         client.get(f"/v1/decisions/{decision['id']}", headers=token(*owner)).json()[
             "title"
@@ -171,10 +175,8 @@ def test_dedupe_upsert_creates_then_is_unchanged_then_refreshes(client, token, o
         "unchanged",
         "refreshed",
     )
-    assert (
-        first["decision"]["id"] == changed["decision"]["id"]
-        and changed["decision"]["version"] == 2
-    )
+    assert first["decision"]["id"] == changed["decision"]["id"]
+    assert changed["decision"]["version"] == 2
     assert (
         client.get(f"/v1/decisions/dedupe/{key}", headers=headers).json()["decision"]
         == "Renew for two"
@@ -335,7 +337,8 @@ def test_reviews_upsert_and_update(client, token, owner):
         headers=headers,
         json={"status": "completed", "outcome": "worked"},
     ).json()
-    assert review["status"] == "completed" and review["version"] == 2
+    assert review["status"] == "completed"
+    assert review["version"] == 2
     pending = client.get(
         "/v1/decision-reviews", headers=headers, params={"status": "pending"}
     ).json()["items"]
@@ -374,7 +377,8 @@ def test_publisher_marks_published_and_backs_off_on_failure(
     platform.fail_publish = True
     with cluster.connect("decisions_publisher") as conn:
         failed = publish_pending(conn, platform, publisher)
-    assert failed["failed"] >= 1 and failed["published"] == 0
+    assert failed["failed"] >= 1
+    assert failed["published"] == 0
     with cluster.connect("postgres", "decisions") as conn:
         conn.execute(
             "UPDATE decisions.outbox SET next_attempt_at = now() WHERE published_at IS NULL"

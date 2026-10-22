@@ -168,3 +168,26 @@ OWNER_ACTIONS = {
     "decisions.decision:delete",
     "decisions.review:write",
 }
+
+
+@pytest.fixture
+def owner(platform: FakePlatform) -> tuple[uuid.UUID, uuid.UUID]:
+    """An actor with every decisions permission, in a fresh workspace."""
+    actor, ws = uuid.uuid4(), uuid.uuid4()
+    platform.grants[actor] = set(OWNER_ACTIONS)
+    return actor, ws
+
+
+def create_decision(
+    client: TestClient, headers: dict[str, str], **extra: Any
+) -> dict[str, Any]:
+    body = {"title": "Pick a CRM", "decision": "Use the hosted agency CRM", **extra}
+    response = client.post("/v1/decisions", json=body, headers=headers)
+    assert response.status_code == 201, response.text
+    result: dict[str, Any] = response.json()
+    return result
+
+
+def superuser(cluster: LocalCluster, query: str, params: Any = ()) -> list[Any]:
+    with cluster.connect("postgres", "decisions") as conn:
+        return conn.execute(query, params).fetchall()

@@ -50,8 +50,9 @@ publisher identity needs `graph.decisions:write`.
 ## Develop
 
 ```bash
-uv venv .venv && uv pip install --python .venv/bin/python -e ".[dev]"
+uv sync --frozen --all-extras        # versions from uv.lock (the image installs the same lock)
 .venv/bin/pytest -q
+uvx ruff@0.17.1 format --check . && uvx ruff@0.17.1 check . && .venv/bin/mypy
 ```
 
 ## Operate

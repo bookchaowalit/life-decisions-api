@@ -19,11 +19,11 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import psycopg
 from fastapi import (
@@ -33,6 +33,7 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Response,
 )
 from fastapi import (
     Request as HttpRequest,
@@ -321,7 +322,7 @@ def subject(decision_id: int) -> str:
 class Work:
     """One write's open local transaction; ``marker`` tags its rows until the execution exists."""
 
-    conn: psycopg.Connection
+    conn: psycopg.Connection[Any]
     marker: uuid.UUID
     caller: Principal
 
@@ -338,7 +339,7 @@ class Plan:
 
 
 def create_app(
-    connect: Callable[[], psycopg.Connection],
+    connect: Callable[[], psycopg.Connection[Any]],
     verifier: TokenVerifier,
     platform: Platform,
     publisher_token: Callable[[], str | None] = lambda: None,
@@ -346,7 +347,10 @@ def create_app(
     app = FastAPI(title="Decisions API", version="1.0.0", description=__doc__)
 
     @app.middleware("http")
-    async def correlate(request: HttpRequest, call_next):
+    async def correlate(
+        request: HttpRequest,
+        call_next: Callable[[HttpRequest], Awaitable[Response]],
+    ) -> Response:
         given = request.headers.get("x-correlation-id", "")
         token = correlation_id.set(
             given if CORRELATION.match(given) else uuid.uuid4().hex
@@ -373,7 +377,7 @@ def create_app(
     Caller = Annotated[Principal, Depends(principal)]
 
     @contextmanager
-    def bound(caller: Principal) -> Iterator[psycopg.Connection]:
+    def bound(caller: Principal) -> Iterator[psycopg.Connection[Any]]:
         try:
             conn = connect()
         except psycopg.OperationalError as exc:
@@ -452,9 +456,9 @@ def create_app(
                         also=plan.extra,
                     )
                 except Denied as exc:
-                    status = exc.status if exc.status in (401, 403, 409) else 403
+                    code = exc.status if exc.status in (401, 403, 409) else 403
                     raise HTTPException(
-                        status_code=status,
+                        status_code=code,
                         detail={"error": exc.decision, "reason": exc.reason},
                     ) from exc
                 except PlatformUnavailable as exc:
@@ -524,10 +528,10 @@ def create_app(
             )
 
     def load(
-        conn: psycopg.Connection, decision_id: int, *, lock: bool = False
+        conn: psycopg.Connection[Any], decision_id: int, *, lock: bool = False
     ) -> dict[str, Any]:
         # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as %s parameters
-        row = conn.execute(
+        row: dict[str, Any] | None = conn.execute(
             f"SELECT {COLUMNS} FROM decisions.records WHERE id = %s{' FOR UPDATE' if lock else ''}",
             (decision_id,),
         ).fetchone()
@@ -539,8 +543,8 @@ def create_app(
         work: Work,
         decision_id: int,
         event: EventIn,
-        before: dict | None,
-        after: dict | None,
+        before: dict[str, Any] | None,
+        after: dict[str, Any] | None,
     ) -> None:
         def pair(name: str) -> tuple[Any, Any]:
             return (before or {}).get(name), (after or {}).get(name)
@@ -574,7 +578,10 @@ def create_app(
         )
 
     def emit(
-        work: Work, verb: str, before: dict | None, after: dict | None
+        work: Work,
+        verb: str,
+        before: dict[str, Any] | None,
+        after: dict[str, Any] | None,
     ) -> dict[str, Any]:
         current = after or before or {}
         decision_id = current["id"]
@@ -605,7 +612,10 @@ def create_app(
         return audit(f"decisions.decision.{verb}", decision_id, before, after)
 
     def audit(
-        action: str, decision_id: int, before: dict | None, after: dict | None
+        action: str,
+        decision_id: int,
+        before: dict[str, Any] | None,
+        after: dict[str, Any] | None,
     ) -> dict[str, Any]:
         return {
             "action": action,
@@ -745,10 +755,14 @@ def create_app(
                 " ON CONFLICT DO NOTHING",
                 (caller.workspace, caller.actor, key),
             )
-            row = conn.execute(
-                "SELECT decision_id FROM decisions.create_keys WHERE actor = %s AND key = %s",
-                (caller.actor, key),
-            ).fetchone()
+            # Inserted above or already there: the key's row always exists here.
+            row = cast(
+                "dict[str, Any]",
+                conn.execute(
+                    "SELECT decision_id FROM decisions.create_keys WHERE actor = %s AND key = %s",
+                    (caller.actor, key),
+                ).fetchone(),
+            )
             conn.commit()
         return int(row["decision_id"])
 
@@ -784,11 +798,15 @@ def create_app(
             columns.append("id")
             params.append(record_id)
             overriding = " OVERRIDING SYSTEM VALUE"
-        row = work.conn.execute(
-            f"INSERT INTO decisions.records ({', '.join(columns)}){overriding}"
-            f" VALUES ({', '.join(['%s'] * len(columns))}) RETURNING {COLUMNS}",
-            params,
-        ).fetchone()
+        # INSERT ... RETURNING always yields the new row.
+        row = cast(
+            "dict[str, Any]",
+            work.conn.execute(
+                f"INSERT INTO decisions.records ({', '.join(columns)}){overriding}"
+                f" VALUES ({', '.join(['%s'] * len(columns))}) RETURNING {COLUMNS}",
+                params,
+            ).fetchone(),
+        )
         event = (
             body.event.model_copy(update={"event_type": "created"})
             if body.event
@@ -803,11 +821,15 @@ def create_app(
         if not data:
             return before
         assignments = ", ".join(f"{name} = %s" for name in data)
-        return work.conn.execute(
-            f"UPDATE decisions.records SET {assignments}, version = version + 1, updated_at = now()"
-            f" WHERE id = %s RETURNING {COLUMNS}",
-            [*data.values(), before["id"]],
-        ).fetchone()
+        # The row is locked by the caller, so UPDATE ... RETURNING always yields it.
+        return cast(
+            "dict[str, Any]",
+            work.conn.execute(
+                f"UPDATE decisions.records SET {assignments}, version = version + 1, updated_at = now()"
+                f" WHERE id = %s RETURNING {COLUMNS}",
+                [*data.values(), before["id"]],
+            ).fetchone(),
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -829,7 +851,8 @@ def create_app(
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> DecisionList:
         allow(caller, "decisions.decision:read")
-        where, params = ["TRUE"], []
+        where: list[str] = ["TRUE"]
+        params: list[Any] = []
         for column, value in (
             ("domain", domain),
             ("approval_status", approval_status),
@@ -1134,7 +1157,8 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
     ) -> EventList:
         allow(caller, "decisions.decision:read")
-        where, params = ["TRUE"], []
+        where: list[str] = ["TRUE"]
+        params: list[Any] = []
         if event_type:
             where.append("event_type = %s")
             params.append(event_type)
@@ -1158,7 +1182,8 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
     ) -> ReviewList:
         allow(caller, "decisions.decision:read")
-        where, params = ["TRUE"], []
+        where: list[str] = ["TRUE"]
+        params: list[Any] = []
         for column, value in (("status", status), ("decision_id", decision_id)):
             if value is not None:
                 where.append(f"{column} = %s")
@@ -1188,7 +1213,7 @@ def create_app(
         return Review(**row)
 
     def review_values(body: ReviewPut, names: set[str]) -> dict[str, Any]:
-        data = {
+        data: dict[str, Any] = {
             name: getattr(body, name)
             for name in (
                 "task_id",

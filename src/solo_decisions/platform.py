@@ -107,7 +107,7 @@ class HttpPlatform:
             raise Denied(401, "unauthenticated", "platform_refused_token")
         if response.status_code != 200:
             raise PlatformUnavailable(f"decide {response.status_code}")
-        return response.json().get("decision") == "allow"
+        return bool(response.json().get("decision") == "allow")
 
     def begin(
         self,

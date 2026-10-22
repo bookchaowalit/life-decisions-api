@@ -177,7 +177,8 @@ def test_outbox_reaches_the_graph_through_the_publisher(
     )
     with cluster.connect("decisions_publisher") as conn:
         result = publish_pending(conn, world["http"], token, limit=1000)
-    assert result["failed"] == 0 and result["published"] >= 1
+    assert result["failed"] == 0
+    assert result["published"] >= 1
     with platform_cluster.connect("postgres") as conn:
         node = conn.execute(
             "SELECT cell, type FROM graph.nodes WHERE urn = %s",

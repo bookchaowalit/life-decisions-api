@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import jwt
 
@@ -43,7 +44,7 @@ class TokenVerifier:
     # Rollover keys for the same issuer: tokens signed by any of them verify too (key rotation).
     extra_public_key_pems: tuple[str, ...] = ()
 
-    def _decode(self, token: str) -> dict:
+    def _decode(self, token: str) -> dict[str, Any]:
         keys = (self.public_key_pem, *self.extra_public_key_pems)
         for key in keys[:-1]:
             try:
@@ -52,7 +53,7 @@ class TokenVerifier:
                 continue
         return self._decode_with(token, keys[-1])
 
-    def _decode_with(self, token: str, key: str) -> dict:
+    def _decode_with(self, token: str, key: str) -> dict[str, Any]:
         return jwt.decode(
             token,
             key,

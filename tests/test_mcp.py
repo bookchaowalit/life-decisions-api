@@ -4,6 +4,7 @@ import asyncio
 
 import httpx
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from solo_decisions import mcp_server as mod
 from solo_decisions.mcp_server import build_server
@@ -98,10 +99,8 @@ def test_create_sends_an_idempotency_key_and_only_the_given_fields():
         "decisions.decision.create",
         {"title": "t", "decision": "d", "idempotency_key": "my-key-0001"},
     )
-    assert (
-        fake.requests[0].headers["idempotency-key"] == "my-key-0001"
-        and b"idempotency_key" not in fake.requests[0].content
-    )
+    assert fake.requests[0].headers["idempotency-key"] == "my-key-0001"
+    assert b"idempotency_key" not in fake.requests[0].content
     with pytest.raises(Exception, match="invalid_arguments"):
         call(
             server(Fake()),
@@ -210,7 +209,7 @@ def test_sample_calls_map_to_the_api():
 
 
 @pytest.mark.parametrize(
-    "status,message",
+    ("status", "message"),
     [
         (400, "400: invalid"),
         (401, "401: unauthorized"),
@@ -234,10 +233,11 @@ def test_errors_are_a_fixed_message_from_the_status_only(status, message):
         "error": {"code": "leak-code", "message": "do-not-leak"},
     }
     name = min(READS)
-    with pytest.raises(Exception) as caught:
+    with pytest.raises(ToolError) as caught:
         call(server(Fake(status=status, body=secret)), name, ARGS.get(name, {}))
     assert str(caught.value).endswith(": " + message)
-    assert "leak" not in str(caught.value) and "tok-123" not in str(caught.value)
+    assert "leak" not in str(caught.value)
+    assert "tok-123" not in str(caught.value)
 
 
 def test_token_with_whitespace_or_control_characters_is_refused_without_echo():
@@ -251,11 +251,10 @@ def test_token_with_whitespace_or_control_characters_is_refused_without_echo():
     ):
         fake = Fake()
         srv = build_server(fake.client(), lambda bad=bad: bad).server
-        with pytest.raises(Exception) as caught:
+        with pytest.raises(ToolError) as caught:
             call(srv, name, ARGS.get(name, {}))
-        assert str(caught.value).endswith(
-            "401: unauthorized"
-        ) and "abcdefgh" not in str(caught.value)
+        assert str(caught.value).endswith("401: unauthorized")
+        assert "abcdefgh" not in str(caught.value)
         assert fake.requests == []
 
 
@@ -275,14 +274,15 @@ def test_no_tool_exposes_a_forbidden_argument_name():
     assert forbidden == set(mod.FORBIDDEN_ARGUMENTS)
     for tool in asyncio.run(server(Fake()).list_tools()):
         assert not forbidden & set(tool.input_schema["properties"]), tool.name
-    with pytest.raises(ValueError):
 
-        class Bad(mod.Strict):
-            actor: str = "x"
+    class Bad(mod.Strict):
+        actor: str = "x"
 
-        mod.Toolbox("x", "x", Fake().client(), lambda: "t").tool("x.bad", Bad, "bad")(
-            lambda a: a
-        )
+    register = mod.Toolbox("x", "x", Fake().client(), lambda: "t").tool(
+        "x.bad", Bad, "bad"
+    )
+    with pytest.raises(ValueError, match="identity arguments are not allowed"):
+        register(lambda a: a)
 
 
 def test_transport_failure_does_not_echo_the_error():
@@ -293,9 +293,10 @@ def test_transport_failure_does_not_echo_the_error():
         httpx.Client(transport=httpx.MockTransport(boom), base_url="https://api.test"),
         lambda: "tok-123",
     ).server
-    with pytest.raises(Exception) as caught:
+    with pytest.raises(ToolError) as caught:
         call(srv, min(READS), ARGS.get(min(READS), {}))
-    assert "tok-123" not in str(caught.value) and "503" in str(caught.value)
+    assert "tok-123" not in str(caught.value)
+    assert "503" in str(caught.value)
 
 
 def test_url_must_be_https_or_loopback(tmp_path):
@@ -348,7 +349,7 @@ def test_automation_name_is_validated_and_tokens_are_cleaned(tmp_path):
         mod.bearer({"EMPIRE_TOKEN_FILE": str(token_file)})
 
 
-def _chain(exc: BaseException):
+def _chain(exc: BaseException | None):
     seen = []
     while exc is not None and exc not in seen:
         seen.append(exc)
@@ -373,14 +374,18 @@ def test_validation_errors_are_fixed_and_name_no_argument_or_value():
             try:
                 call(srv, name, args)
             except Exception as exc:  # noqa: BLE001
-                rejected[name] = rejected.get(name, 0) + 1
-                assert str(exc).endswith("invalid_arguments") and "MARKER" not in str(
-                    exc
-                )
-                assert exc.__cause__ is None and exc.__context__ is None
-                for link in _chain(exc):
-                    assert "MARKER" not in str(link) and "MARKER" not in repr(link)
+                failure = exc
+            else:
+                continue
+            rejected[name] = rejected.get(name, 0) + 1
+            assert str(failure).endswith("invalid_arguments")
+            assert "MARKER" not in str(failure)
+            assert failure.__cause__ is None
+            assert failure.__context__ is None
+            for link in _chain(failure):
+                assert "MARKER" not in str(link)
+                assert "MARKER" not in repr(link)
     assert set(rejected) == READS | WRITES
-    with pytest.raises(Exception) as caught:
+    with pytest.raises(ToolError) as caught:
         call(srv, "x.UNTRUSTED_MARKER", {"a": "VALUE_MARKER"})
     assert "MARKER" not in str(caught.value) + repr(caught.value)

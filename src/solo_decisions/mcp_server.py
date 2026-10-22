@@ -30,6 +30,7 @@ from typing import Any, Literal
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp_types import Tool as MCPTool
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
@@ -146,7 +147,7 @@ class StrictMCPServer(MCPServer):
         super().__init__(*args, **kwargs)
         self.argument_models: dict[str, type[Strict]] = {}
 
-    async def list_tools(self):  # type: ignore[override]
+    async def list_tools(self) -> list[MCPTool]:
         tools = await super().list_tools()
         for tool in tools:
             model = self.argument_models.get(tool.name)
@@ -159,7 +160,7 @@ class StrictMCPServer(MCPServer):
 
     async def call_tool(
         self, name: str, arguments: dict[str, Any], context: Any = None
-    ):  # type: ignore[override]
+    ) -> Any:
         model = self.argument_models.get(name)
         if model is None:
             raise ToolFailed("unknown_tool")
@@ -253,7 +254,7 @@ class Toolbox:
 
     def tool(
         self, name: str, model: type[Strict], description: str, *, write: bool = False
-    ):
+    ) -> Callable[[Callable[[Any], Any]], Callable[[Any], Any]]:
         def register(handler: Callable[[Any], Any]) -> Callable[[Any], Any]:
             banned = FORBIDDEN_ARGUMENTS & set(model.model_fields)
             if banned:
@@ -277,7 +278,7 @@ class Toolbox:
                 )
                 for field, info in model.model_fields.items()
             ]
-            function.__signature__ = inspect.Signature(params)  # type: ignore[attr-defined]
+            function.__signature__ = inspect.Signature(params)  # type: ignore[attr-defined]  # functions take a __signature__ at runtime; the server's inspect.signature() reads it
             function.__annotations__ = {p.name: p.annotation for p in params}
             function.__name__ = name.replace(".", "_")
             self.server.argument_models[name] = model

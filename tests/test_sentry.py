@@ -61,7 +61,9 @@ def test_scrub_removes_url_passwords_tokens_and_jwts():
         f"pass" + "word=" + "dummy-value Authorization: Bearer " + "abc.def-ghi " + _JWT
     )
     out = _sentry.scrub(text)
-    assert _PW not in out and "dummy-value" not in out and "abc.def-ghi" not in out
+    assert _PW not in out
+    assert "dummy-value" not in out
+    assert "abc.def-ghi" not in out
     assert _JWT not in out
     assert "postgresql://habits:***@db.example/habits" in out
 

@@ -13,7 +13,10 @@ from __future__ import annotations
 import os
 import re
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from sentry_sdk.types import Event, Hint
 
 # scheme://user:password@host -> scheme://user:***@host
 _URL_PASSWORD = re.compile(
@@ -34,31 +37,33 @@ def scrub(text: str) -> str:
     return _JWT.sub("***jwt***", text)
 
 
-def _scrub_event(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]:
-    for exc in (event.get("exception") or {}).get("values") or []:
+def _scrub_event(event: Event, _hint: Hint) -> Event:
+    # Scrubbed in place as a plain dict: the Event TypedDict is too strict for these edits.
+    data = cast("dict[str, Any]", event)
+    for exc in (data.get("exception") or {}).get("values") or []:
         if isinstance(exc.get("value"), str):
             exc["value"] = scrub(exc["value"])
-    if isinstance(event.get("message"), str):
-        event["message"] = scrub(event["message"])
-    logentry = event.get("logentry")
+    if isinstance(data.get("message"), str):
+        data["message"] = scrub(data["message"])
+    logentry = data.get("logentry")
     if isinstance(logentry, dict):
         # Logging events carry the template, the raw params and the formatted text; keep only
         # the scrubbed formatted text (a param like a token is no longer next to "Bearer").
         formatted = logentry.get("formatted") or logentry.get("message")
-        event["logentry"] = {"message": scrub(str(formatted))} if formatted else {}
-    request = event.get("request")
+        data["logentry"] = {"message": scrub(str(formatted))} if formatted else {}
+    request = data.get("request")
     if isinstance(request, dict):
         # Keep only the method. URLs can carry personal data (slugs, ids, query strings); the
-        # route template (e.g. /v1/habits/slug/{slug}) is already in event["transaction"].
-        event["request"] = {"method": request["method"]} if "method" in request else {}
-    for crumb in (event.get("breadcrumbs") or {}).get("values") or []:
+        # route template (e.g. /v1/habits/slug/{slug}) is already in data["transaction"].
+        data["request"] = {"method": request["method"]} if "method" in request else {}
+    for crumb in (data.get("breadcrumbs") or {}).get("values") or []:
         if isinstance(crumb.get("message"), str):
             crumb["message"] = scrub(crumb["message"])
         crumb.pop("data", None)
-    event.pop("extra", None)
+    data.pop("extra", None)
     # Incoming baggage headers end up here and in the envelope's trace header (user ids,
     # transaction names); errors don't need them.
-    trace = (event.get("contexts") or {}).get("trace")
+    trace = (data.get("contexts") or {}).get("trace")
     if isinstance(trace, dict):
         trace.pop("dynamic_sampling_context", None)
     return event
