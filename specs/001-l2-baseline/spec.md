@@ -169,3 +169,10 @@ Big Loop Plan Wave 2 (solo-empire `repository-catalog/roadmaps/BIG-LOOP-PLAN-202
 |---|---|---|---|---|
 | Implemented (DoD) | Reviewer (checker) | Fresh Claude reviewer / 2026-10-22 | see Wave 2 report | CI run of the pushed tip |
 | Implemented (DoD) | Approver | Owner | pending | Wave 2 report |
+
+## Review (2026-10-24): changes requested
+
+Checker: independent Claude reviewer subagent (`solo:solo-reviewer`, Sonnet, read-only, no maker context). Status unchanged until fixed.
+
+- Tests run by the checker: .venv/bin/pytest -q --cov: 88 passed, 1 skipped
+- Gap: All 10 cited tests pass, but §4 'Interfaces and data' table is corrupted (single characters per cell, e.g. '| P | O | S |'), and §5 performance + risk #1 are copy-paste from the range-rule specs. Regenerate §4 and drop the irrelevant text.
