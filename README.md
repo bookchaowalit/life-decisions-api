@@ -8,7 +8,7 @@ HTTP with the caller's own token.
 | | |
 |---|---|
 | API | Railway project `life-decisions-api`, service `decisions-api` (Serverless: sleeps when idle) |
-| Outbox sweep | service `decisions-publisher`, cron `*/15 * * * *` |
+| Outbox sweep | service `decisions-publisher`, cron `5 * * * *` |
 | Data | Neon project `life-decisions-api`, database `decisions` |
 | Registry | solo-empire `repository-catalog/registries/online-systems.yaml` (`decisions`) |
 

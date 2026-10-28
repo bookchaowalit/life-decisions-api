@@ -22,7 +22,7 @@ export default defineRailway(() => {
   const publisher = service("decisions-publisher", {
     source: github,
     startCommand: "decisions-publish",
-    deploy: { cronSchedule: "*/15 * * * *", restartPolicyType: "NEVER" },
+    deploy: { cronSchedule: "5 * * * *", restartPolicyType: "NEVER" },
   });
 
   return project("life-decisions-api", {
