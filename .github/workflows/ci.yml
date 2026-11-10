@@ -29,7 +29,5 @@ jobs:
 
   image:
     # Builds the Dockerfile and scans the image with Trivy (packages inside the image, which the
-    # Trivy fs scan cannot see). Report-only for now: remove fail-on-findings once the image is clean.
-    uses: bookchaowalit/platform-ci-workflows/.github/workflows/image-scan.yml@48dccf52c57fb68c4abda83b6bcda7f0a789e822 # v1.6.1
-    with:
-      fail-on-findings: false
+    # Trivy fs scan cannot see). Blocking: a fixable HIGH/CRITICAL finding fails CI (and so Railway's Wait for CI).
+    uses: bookchaowalit/platform-ci-workflows/.github/workflows/image-scan.yml@b9957cccb3cc202e9e1a08df01924b8270d796df # v1.6.3
