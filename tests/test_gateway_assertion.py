@@ -324,6 +324,8 @@ def test_probe_paths_and_a_trailing_slash_stay_open():
 
 def test_a_stalled_body_is_answered_408_and_not_waited_on(monkeypatch):
     import asyncio
+    from collections.abc import MutableMapping
+    from typing import Any
 
     monkeypatch.setattr(gw, "BODY_TIMEOUT_SECONDS", 0.2)
     app = FastAPI()
@@ -336,13 +338,13 @@ def test_a_stalled_body_is_answered_408_and_not_waited_on(monkeypatch):
     header = gw.expected(
         KEY, SYSTEM_FOR_ADDON, "POST", "/v1/items", int(time.time()), "req-9", ""
     )
-    sent: list[dict[str, object]] = []
+    sent: list[MutableMapping[str, Any]] = []
 
-    async def receive() -> dict[str, object]:
+    async def receive() -> MutableMapping[str, Any]:
         await asyncio.sleep(5)  # the client never sends its body
         return {"type": "http.disconnect"}
 
-    async def send(message: dict[str, object]) -> None:
+    async def send(message: MutableMapping[str, Any]) -> None:
         sent.append(message)
 
     scope = {
