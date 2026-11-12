@@ -13,6 +13,7 @@ life-habits-api and platform-api-gateway, so change them together.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -31,8 +32,19 @@ if TYPE_CHECKING:
 SYSTEM = "decisions"  # this service's id in the gateway route table
 HEADER = "x-gateway-assertion"
 MAX_SKEW_SECONDS = 60
-# Platform probes and describe_cell stay reachable without the gateway.
-OPEN_PATHS = ("/health", "/readyz", "/openapi.json", "/.well-known/")
+# Platform probes and describe_cell stay reachable without the gateway (the platform-* services probe
+# /healthz and /readyz; some cells answer /ready).
+OPEN_PATHS = (
+    "/health",
+    "/healthz",
+    "/ready",
+    "/readyz",
+    "/openapi.json",
+    "/.well-known/",
+)
+# A body the header says to wait for must arrive within this, or the request is "invalid" (a client that
+# sends a well-formed header and then stalls cannot hold the connection).
+BODY_TIMEOUT_SECONDS = 30
 # The gateway refuses bodies above 1 MiB (MAX_BODY_BYTES) and forwards a Content-Length, so a bigger or
 # length-less (chunked) body cannot carry a valid assertion: it is "invalid" without being read.
 MAX_BODY_BYTES = 1_048_576
@@ -148,8 +160,11 @@ def check(
 
 
 def is_open(path: str) -> bool:
+    # One trailing slash is ignored, as the routers do (/health/ is /health).
+    path = path[:-1] if len(path) > 1 and path.endswith("/") else path
     return any(
-        path == p or (p.endswith("/") and path.startswith(p)) for p in OPEN_PATHS
+        path == p or (p.endswith("/") and (path + "/").startswith(p))
+        for p in OPEN_PATHS
     )
 
 
@@ -222,6 +237,12 @@ def install(app: FastAPI, gateway: GatewayCheck | None) -> None:
                 "latin-1"
             )
             query = request.scope.get("query_string", b"").decode("latin-1")
+            try:
+                body = await asyncio.wait_for(request.body(), BODY_TIMEOUT_SECONDS)
+            except TimeoutError:
+                # A stalled body: answered at once in either mode, and the connection is not held.
+                report("invalid", request.method, path)
+                return JSONResponse({"error": "request_timeout"}, status_code=408)
             result = check(
                 gateway.key,
                 gateway.system,
@@ -231,7 +252,7 @@ def install(app: FastAPI, gateway: GatewayCheck | None) -> None:
                 request.headers.get("authorization", ""),
                 time.time(),
                 request.headers.get("content-type", ""),
-                await request.body(),  # cached by Starlette, so the route still reads it
+                body,  # cached by Starlette, so the route still reads it
             )
         report(result, request.method, path)
         if gateway.refuses(path, result):

@@ -302,3 +302,64 @@ def test_a_forged_header_with_a_big_body_is_refused_unread(monkeypatch):
     refused = client.post("/v1/items", content=body, headers=headers)
     assert refused.status_code == 403
     assert reads == []
+
+
+SYSTEM_FOR_ADDON = "addon-test"
+
+
+def test_probe_paths_and_a_trailing_slash_stay_open():
+    for path in (
+        "/health",
+        "/healthz",
+        "/ready",
+        "/readyz",
+        "/health/",
+        "/healthz/",
+        "/.well-known/jwks.json",
+    ):
+        assert gw.is_open(path), path
+    for path in ("/healthcheck", "/ready-now", "/v1/health"):
+        assert not gw.is_open(path), path
+
+
+def test_a_stalled_body_is_answered_408_and_not_waited_on(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(gw, "BODY_TIMEOUT_SECONDS", 0.2)
+    app = FastAPI()
+    gw.install(app, GatewayCheck(SYSTEM_FOR_ADDON, "report", KEY))
+
+    @app.post("/v1/items")
+    async def items() -> dict[str, str]:
+        return {"ok": "served"}
+
+    header = gw.expected(
+        KEY, SYSTEM_FOR_ADDON, "POST", "/v1/items", int(time.time()), "req-9", ""
+    )
+    sent: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        await asyncio.sleep(5)  # the client never sends its body
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/items",
+        "raw_path": b"/v1/items",
+        "query_string": b"",
+        "headers": [
+            (b"x-gateway-assertion", header.encode()),
+            (b"content-length", b"10"),
+        ],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), 3))
+    assert sent[0]["status"] == 408
